@@ -1,0 +1,1818 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>RadiusTap Overlay HUD — Floating Auto-Click Overlay &amp; Android Service</title>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Tone.js for crisp synthetic click/hit feedback without external URLs -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
+  <!-- Google Fonts: Inter & JetBrains Mono -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+          },
+          colors: {
+            obsidian: '#09090f',
+            panel: '#11121c',
+            panelLight: '#181a28',
+            neonPurple: '#a855f7',
+            ringPurple: '#6c2bd9',
+            neonEmerald: '#10b981',
+            targetPink: '#ff66b2',
+          }
+        }
+      }
+    };
+  </script>
+
+  <style>
+    html, body {
+      background-color: #09090f;
+      color: #f3f4f6;
+      font-family: 'Inter', sans-serif;
+      overflow: hidden;
+      height: 100%;
+      width: 100%;
+      touch-action: none;
+    }
+
+    /* Custom range slider styling */
+    input[type="range"] {
+      -webkit-appearance: none;
+      appearance: none;
+      background: rgba(255, 255, 255, 0.14);
+      height: 5px;
+      border-radius: 999px;
+      outline: none;
+    }
+    input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: #10b981;
+      border: 2px solid #09090f;
+      cursor: pointer;
+      box-shadow: 0 0 10px rgba(16, 185, 129, 0.7);
+      transition: transform 0.12s ease;
+    }
+    input[type="range"]::-webkit-slider-thumb:hover {
+      transform: scale(1.18);
+    }
+
+    /* Floating HUD glass elevation */
+    .floating-hud-glass {
+      background: rgba(13, 15, 25, 0.88);
+      backdrop-filter: blur(18px);
+      -webkit-backdrop-filter: blur(18px);
+      box-shadow:
+        0 20px 50px rgba(0, 0, 0, 0.65),
+        0 0 0 1px rgba(255, 255, 255, 0.12),
+        inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    }
+
+    /* Custom thin scrollbar for modal & drawer */
+    .custom-scroll::-webkit-scrollbar {
+      width: 5px;
+      height: 5px;
+    }
+    .custom-scroll::-webkit-scrollbar-track {
+      background: rgba(255, 255, 255, 0.03);
+    }
+    .custom-scroll::-webkit-scrollbar-thumb {
+      background: rgba(168, 85, 247, 0.4);
+      border-radius: 999px;
+    }
+  </style>
+</head>
+<body class="relative w-screen h-screen overflow-hidden select-none">
+
+  <!-- Notification Toast Banner (Replaces alert()) -->
+  <div id="toast-container" class="fixed top-4 left-1/2 -translate-x-1/2 z-[70] flex flex-col items-center gap-2 pointer-events-none"></div>
+
+  <!-- =====================================================================
+       FULL-SCREEN GAME STAGE (MOBILE GAME VIEWPORT + LIVE MIRROR SUPPORT)
+       ===================================================================== -->
+  <main id="fullscreen-stage"
+    class="relative w-full h-full flex items-center justify-center overflow-hidden"
+    style="background: linear-gradient(180deg, #dceeff 0%, #ede7ff 52%, #f8e8f8 100%);">
+
+    <!-- Optional Live Screen Capture Video Feed -->
+    <video id="mirrorVideo" autoplay playsinline muted class="hidden absolute inset-0 w-full h-full object-contain bg-black"></video>
+
+    <!-- Primary Full-Screen Interactive Game + Vision Reticle Canvas -->
+    <canvas id="gameCanvas" class="w-full h-full block cursor-pointer"></canvas>
+
+    <!-- Subtle Bottom-Center Stage Hint -->
+    <div id="stage-hint-pill"
+      class="fixed bottom-3 left-1/2 -translate-x-1/2 z-20 px-3.5 py-1.5 rounded-full bg-slate-900/75 backdrop-blur-md border border-white/10 text-[11px] font-medium text-white/90 pointer-events-none whitespace-nowrap shadow-lg">
+      Tap anywhere or press <kbd class="px-1.5 py-0.5 bg-white/20 rounded text-[10px] font-mono">SPACE</kbd> to manual tap • Drag floating HUD anywhere
+    </div>
+  </main>
+
+  <!-- =====================================================================
+       DRAGGABLE FLOATING AUTO-CLICK OVERLAY HUD (ANDROID OVERLAY STYLE)
+       ===================================================================== -->
+  <aside id="floating-hud"
+    style="left: 16px; top: 16px;"
+    class="fixed z-40 w-[336px] max-w-[calc(100vw-24px)] rounded-2xl floating-hud-glass text-gray-100 transition-shadow duration-200">
+
+    <!-- Top Drag Handle & Compact Control Bar -->
+    <div id="hud-drag-handle"
+      class="flex items-center justify-between px-3 py-2.5 border-b border-white/10 cursor-grab active:cursor-grabbing touch-none">
+      <!-- Drag Grip + App Badge -->
+      <div class="flex items-center gap-2">
+        <div class="text-gray-400 hover:text-white transition flex items-center justify-center w-6 h-6 rounded-lg bg-white/5" title="Drag Overlay">
+          <span class="font-mono text-xs tracking-tighter leading-none">⋮⋮</span>
+        </div>
+        <div class="flex items-center gap-1.5">
+          <span id="hud-status-led" class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_8px_#10b981]"></span>
+          <span class="text-xs font-extrabold tracking-tight text-white">RadiusTap</span>
+          <span class="px-1.5 py-0.5 text-[9px] font-mono font-bold uppercase rounded bg-purple-500/20 text-purple-300 border border-purple-500/30">
+            HUD
+          </span>
+        </div>
+      </div>
+
+      <!-- Right Action Icons: Single-Step Tap, Audio, Collapse/Expand -->
+      <div class="flex items-center gap-1.5">
+        <!-- Single-Step Test Tap -->
+        <button onclick="manualTriggerTap(true)" title="Single-Step Test Tap"
+          class="w-7 h-7 rounded-lg bg-purple-600/25 hover:bg-purple-600/40 border border-purple-500/40 text-purple-200 flex items-center justify-center transition">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.3" viewBox="0 0 24 24">
+            <circle cx="12" cy="12" r="9" />
+            <circle cx="12" cy="12" r="2.5" fill="currentColor" />
+          </svg>
+        </button>
+
+        <!-- Audio Feedback Toggle -->
+        <button id="hud-audio-btn" onclick="toggleAudio()" title="Toggle Click Audio"
+          class="w-7 h-7 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-xs flex items-center justify-center transition">
+          <span id="hud-audio-icon">🔊</span>
+        </button>
+
+        <!-- Collapse / Expand Pill Toggle -->
+        <button id="hud-collapse-btn" onclick="toggleHudCollapse()" title="Collapse / Expand Overlay"
+          class="w-7 h-7 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-gray-300 flex items-center justify-center transition">
+          <svg id="hud-collapse-icon" class="w-3.5 h-3.5 transition-transform duration-200" fill="none" stroke="currentColor" stroke-width="2.4" viewBox="0 0 24 24">
+            <path d="M18 15l-6-6-6 6" />
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- Master Power Bar (Always Visible Even When Collapsed) -->
+    <div class="px-3 py-2.5 flex items-center gap-2">
+      <button id="master-power-btn" onclick="toggleAutoTap()"
+        class="flex-1 py-2 px-3 rounded-xl font-bold text-xs tracking-wide transition-all flex items-center justify-center gap-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-lg shadow-emerald-500/25">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+          <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+        </svg>
+        <span id="master-power-label">AUTO ON • CENTER LOCK</span>
+      </button>
+
+      <!-- Background Source Switcher (Sim vs Screen Mirror) -->
+      <button id="source-mode-btn" onclick="toggleBackgroundSource()" title="Switch Background: Game Simulator vs Live Screen Capture"
+        class="px-2.5 py-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-[11px] font-mono font-semibold text-gray-200 flex items-center gap-1.5 transition shrink-0">
+        <span id="source-mode-dot" class="w-2 h-2 rounded-full bg-purple-400"></span>
+        <span id="source-mode-label">SIM</span>
+      </button>
+    </div>
+
+    <!-- Collapsible Telemetry & Tuning Body -->
+    <div id="hud-collapsible-body" class="px-3 pb-3 space-y-2.5">
+
+      <!-- Live Telemetry Pills Grid -->
+      <div class="grid grid-cols-5 gap-1.5 text-center">
+        <div class="bg-white/[0.04] border border-white/10 rounded-xl py-1.5 px-1">
+          <div class="text-[9px] font-mono uppercase text-gray-400">θ_T</div>
+          <div id="pill-target-angle" class="text-xs font-mono font-bold text-emerald-400 mt-0.5">310°</div>
+        </div>
+        <div class="bg-white/[0.04] border border-white/10 rounded-xl py-1.5 px-1">
+          <div class="text-[9px] font-mono uppercase text-gray-400">θ_D</div>
+          <div id="pill-dot-angle" class="text-xs font-mono font-bold text-purple-300 mt-0.5">90°</div>
+        </div>
+        <div class="bg-white/[0.04] border border-white/10 rounded-xl py-1.5 px-1">
+          <div class="text-[9px] font-mono uppercase text-gray-400">ω</div>
+          <div id="pill-omega" class="text-xs font-mono font-bold text-amber-300 mt-0.5">169°</div>
+        </div>
+        <div class="bg-white/[0.04] border border-white/10 rounded-xl py-1.5 px-1">
+          <div class="text-[9px] font-mono uppercase text-gray-400">Lead</div>
+          <div id="pill-lead" class="text-xs font-mono font-bold text-sky-300 mt-0.5">+12ms</div>
+        </div>
+        <div class="bg-white/[0.04] border border-white/10 rounded-xl py-1.5 px-1">
+          <div class="text-[9px] font-mono uppercase text-gray-400">Streak</div>
+          <div id="pill-streak" class="text-xs font-mono font-bold text-pink-400 mt-0.5">0</div>
+        </div>
+      </div>
+
+      <!-- Anchor Coordinate & Direction Strip -->
+      <div class="flex items-center justify-between px-2.5 py-1.5 rounded-xl bg-black/40 border border-white/5 text-[10px] font-mono">
+        <span class="text-gray-400">Anchor: <strong id="hud-anchor-coords" class="text-emerald-400">(0, 0)</strong></span>
+        <span id="hud-direction-pill" class="px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-300">CW ↻</span>
+      </div>
+
+      <!-- Collapsible Tuning & Calibration Drawer -->
+      <div class="border border-white/10 rounded-xl bg-white/[0.02] overflow-hidden">
+        <button onclick="toggleTuningDrawer()"
+          class="w-full px-3 py-2 flex items-center justify-between text-[11px] font-semibold text-gray-200 hover:bg-white/5 transition">
+          <span class="flex items-center gap-1.5">
+            <svg class="w-3.5 h-3.5 text-emerald-400" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24">
+              <path d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
+            </svg>
+            <span>Reticle &amp; Timing Calibration</span>
+          </span>
+          <span id="tuning-drawer-chevron" class="font-mono text-gray-400 text-xs">▾</span>
+        </button>
+
+        <div id="tuning-drawer-content" class="px-3 pb-3 pt-1 space-y-2.5 border-t border-white/10">
+          <!-- Tap Mode Segmented Switch -->
+          <div>
+            <div class="flex justify-between text-[10px] text-gray-400 mb-1">
+              <span>Tap Anchor Mode</span>
+              <span id="tap-mode-desc" class="font-mono text-emerald-400">Exact White Core</span>
+            </div>
+            <div class="grid grid-cols-2 gap-1 p-0.5 rounded-lg bg-black/50 border border-white/10 text-[10px] font-semibold">
+              <button id="mode-center-btn" onclick="setTapMode('center')"
+                class="py-1.5 px-2 rounded-md bg-emerald-500 text-slate-950 font-bold transition">
+                Tap Center Radius
+              </button>
+              <button id="mode-zone-btn" onclick="setTapMode('zone')"
+                class="py-1.5 px-2 rounded-md text-gray-400 hover:text-white transition">
+                Tap Target Zone
+              </button>
+            </div>
+          </div>
+
+          <!-- Slider 1: Lead / Latency Offset (-150ms to +150ms) -->
+          <div>
+            <div class="flex justify-between text-[10px] mb-1">
+              <label for="slider-lead" class="text-gray-300">Lead / Latency Offset</label>
+              <span id="val-lead" class="font-mono font-bold text-emerald-400">+12 ms</span>
+            </div>
+            <input id="slider-lead" type="range" min="-150" max="150" value="12" class="w-full" oninput="updateCalibration()" />
+          </div>
+
+          <!-- Slider 2: Ring Radius Calibration (px) -->
+          <div>
+            <div class="flex justify-between text-[10px] mb-1">
+              <label for="slider-radius" class="text-gray-300">Ring Radius Calibration</label>
+              <span id="val-radius" class="font-mono font-bold text-purple-300">Auto (145 px)</span>
+            </div>
+            <input id="slider-radius" type="range" min="70" max="280" value="145" class="w-full" oninput="updateRadiusCalibration()" />
+          </div>
+
+          <!-- Slider 3: White Target Luminance/Saturation Threshold -->
+          <div>
+            <div class="flex justify-between text-[10px] mb-1">
+              <label for="slider-tolerance" class="text-gray-300">White Target Tolerance</label>
+              <span id="val-tolerance" class="font-mono font-bold text-sky-300">28 ΔRGB</span>
+            </div>
+            <input id="slider-tolerance" type="range" min="5" max="85" value="28" class="w-full" oninput="updateCalibration()" />
+          </div>
+
+          <!-- Slider 4: Simulator Pendulum Speed -->
+          <div>
+            <div class="flex justify-between text-[10px] mb-1">
+              <label for="slider-speed" class="text-gray-300">Pendulum Speed (Sim)</label>
+              <span id="val-speed" class="font-mono font-bold text-amber-300">1.00x</span>
+            </div>
+            <input id="slider-speed" type="range" min="0.4" max="2.2" step="0.05" value="1.0" class="w-full" oninput="updateCalibration()" />
+          </div>
+
+          <!-- Reticle & Overlay Toggles -->
+          <div class="flex items-center justify-between pt-1 border-t border-white/10 text-[10px]">
+            <label class="flex items-center gap-1.5 text-gray-300 cursor-pointer">
+              <input id="toggle-debug-overlay" type="checkbox" checked class="accent-emerald-500 rounded" />
+              <span>Show Ring Reticle</span>
+            </label>
+            <button onclick="recenterReticle()" class="text-purple-400 hover:text-purple-300 font-mono underline">
+              Center Reticle
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Bottom Action Row: Reset & Export Android Accessibility Overlay App -->
+      <div class="flex items-center gap-2">
+        <button onclick="resetSimulator()"
+          class="px-2.5 py-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-[11px] font-semibold text-gray-300 transition">
+          Reset
+        </button>
+        <button onclick="openAndroidExportModal()"
+          class="flex-1 py-2 px-3 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold text-[11px] shadow-lg shadow-purple-600/25 flex items-center justify-center gap-1.5 transition">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24">
+            <path d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+          </svg>
+          <span>Export Android Overlay App</span>
+        </button>
+      </div>
+    </div>
+  </aside>
+
+  <!-- =====================================================================
+       MODAL: EXPORT NATIVE ANDROID ACCESSIBILITY OVERLAY APP (KOTLIN + XML)
+       ===================================================================== -->
+  <div id="android-export-modal"
+    class="hidden fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-6">
+    <div class="bg-[#11121c] border border-white/15 rounded-2xl w-full max-w-4xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden">
+
+      <!-- Modal Header -->
+      <div class="px-5 py-4 border-b border-white/10 flex items-center justify-between gap-3 bg-[#151724]">
+        <div class="flex items-center gap-3">
+          <div class="w-9 h-9 rounded-xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24">
+              <rect x="5" y="2" width="14" height="20" rx="2" />
+              <path d="M12 18h.01" />
+            </svg>
+          </div>
+          <div>
+            <h2 class="text-sm sm:text-base font-bold text-white">Native Android Floating Auto-Click Overlay Service</h2>
+            <p class="text-xs text-gray-400">Kotlin <code class="text-purple-300">AccessibilityService</code> + <code class="text-purple-300">WindowManager</code> + <code class="text-emerald-400">MediaProjection</code> using the exact same radial vision engine</p>
+          </div>
+        </div>
+        <button onclick="closeAndroidExportModal()"
+          class="w-8 h-8 rounded-lg bg-white/5 hover:bg-white/10 text-gray-300 flex items-center justify-center transition">
+          ✕
+        </button>
+      </div>
+
+      <!-- File Tabs inside Modal -->
+      <div class="px-5 pt-3 border-b border-white/10 flex flex-wrap items-center justify-between gap-2 bg-[#0d0e16]">
+        <div class="flex items-center gap-1.5">
+          <button id="export-tab-kt" onclick="switchExportTab('kt')"
+            class="px-3 py-2 rounded-t-lg text-xs font-mono font-bold bg-[#181a28] text-emerald-400 border-t border-x border-white/10">
+            RadiusTapOverlayService.kt
+          </button>
+          <button id="export-tab-xml" onclick="switchExportTab('xml')"
+            class="px-3 py-2 rounded-t-lg text-xs font-mono font-semibold text-gray-400 hover:text-white">
+            AndroidManifest &amp; accessibility_config.xml
+          </button>
+        </div>
+
+        <div class="flex items-center gap-2 pb-2">
+          <button onclick="downloadAndroidCode()"
+            class="px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-semibold text-gray-200 transition">
+            Download File
+          </button>
+          <button onclick="copyAndroidCode()"
+            class="px-3.5 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs shadow-lg shadow-emerald-500/20 transition flex items-center gap-1.5">
+            <span id="modal-copy-label">Copy Code</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Code Display Area -->
+      <div class="flex-1 overflow-auto custom-scroll bg-[#09090f] p-4">
+        <pre id="android-code-viewer" class="text-xs leading-relaxed font-mono text-gray-200 select-all whitespace-pre"></pre>
+      </div>
+
+      <!-- Modal Footer Instructions -->
+      <div class="px-5 py-3 border-t border-white/10 bg-[#151724] flex flex-wrap items-center justify-between gap-2 text-[11px] text-gray-400">
+        <span>Grants <strong class="text-gray-200">SYSTEM_ALERT_WINDOW</strong> + <strong class="text-gray-200">AccessibilityService</strong> to dispatch real <code class="text-emerald-400">dispatchGesture()</code> taps on your phone.</span>
+        <button onclick="closeAndroidExportModal()" class="px-4 py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-white font-semibold">
+          Done
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- =======================================================================
+       NATIVE ANDROID KOTLIN & XML TEMPLATES (EXACT ALGORITHM TRANSLATION)
+       ======================================================================= -->
+  <script type="text/plain" id="kotlin-service-template">package com.radiustap.overlay
+
+import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.GestureDescription
+import android.content.Context
+import android.graphics.*
+import android.hardware.display.DisplayManager
+import android.hardware.display.VirtualDisplay
+import android.media.ImageReader
+import android.media.projection.MediaProjection
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.view.*
+import android.view.accessibility.AccessibilityEvent
+import android.widget.FrameLayout
+import android.widget.LinearLayout
+import android.widget.TextView
+import kotlin.math.*
+
+/**
+ * RadiusTapOverlayService
+ * -----------------------
+ * Native Android AccessibilityService + TYPE_APPLICATION_OVERLAY floating HUD.
+ * Uses the exact 360-step radial ring scanner (`sampleRingAngles`), contiguous
+ * white target clustering (`findWhiteTargetCluster`), circular mean calculation
+ * (`atan2(sin, cos)`), angular velocity estimation (`dTheta / dt`), and
+ * lead-time intersection trigger to call `dispatchGesture()` at the center radius
+ * every time the target moves.
+ */
+class RadiusTapOverlayService : AccessibilityService() {
+
+    private lateinit var windowManager: WindowManager
+    private lateinit var overlayHudView: View
+    private lateinit var reticleOverlayView: ReticleCanvasView
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    // Calibration parameters synced with HUD sliders
+    var autoTapEnabled: Boolean = true
+    var leadOffsetMs: Double = 18.0
+    var whiteTolerance: Int = 28
+    var ringCenterX: Float = 540f
+    var ringCenterY: Float = 1080f
+    var ringRadiusPx: Float = 340f
+
+    // Angular tracking state
+    private var detectedTargetAngle: Double = -Math.PI * 0.28
+    private var prevDotAngle: Double? = null
+    private var prevFrameTimeSec: Double? = null
+    private var lastTapTimestampMs: Long = 0L
+
+    // Screen capture pipeline
+    private var mediaProjection: MediaProjection? = null
+    private var imageReader: ImageReader? = null
+    private var virtualDisplay: VirtualDisplay? = null
+
+    override fun onServiceConnected() {
+        super.onServiceConnected()
+        windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+
+        val metrics = resources.displayMetrics
+        ringCenterX = metrics.widthPixels * 0.50f
+        ringCenterY = metrics.heightPixels * 0.48f
+        ringRadiusPx = min(metrics.widthPixels, metrics.heightPixels) * 0.31f
+
+        attachReticleOverlay()
+        attachDraggableHudOverlay()
+    }
+
+    /**
+     * 1. Non-touchable transparent reticle overlay showing the locked white
+     *    center radius crosshair directly over the target game.
+     */
+    private fun attachReticleOverlay() {
+        reticleOverlayView = ReticleCanvasView(this)
+        val params = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT
+        )
+        windowManager.addView(reticleOverlayView, params)
+    }
+
+    /**
+     * 2. Draggable floating control pill HUD with Master Auto ON/OFF toggle.
+     */
+    private fun attachDraggableHudOverlay() {
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(28, 18, 28, 18)
+            setBackgroundColor(Color.parseColor("#E00D0F19"))
+        }
+
+        val statusLabel = TextView(this).apply {
+            text = "⋮⋮  RadiusTap AUTO ON"
+            setTextColor(Color.parseColor("#10B981"))
+            textSize = 13f
+            typeface = Typeface.DEFAULT_BOLD
+        }
+        container.addView(statusLabel)
+
+        val hudParams = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = 40
+            y = 120
+        }
+
+        // Touch listener supporting both drag repositioning and click toggle
+        var initialX = 0
+        var initialY = 0
+        var touchX = 0f
+        var touchY = 0f
+        var moved = false
+
+        container.setOnTouchListener { _, event ->
+            when (event.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    initialX = hudParams.x
+                    initialY = hudParams.y
+                    touchX = event.rawX
+                    touchY = event.rawY
+                    moved = false
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = (event.rawX - touchX).toInt()
+                    val dy = (event.rawY - touchY).toInt()
+                    if (abs(dx) > 6 || abs(dy) > 6) moved = true
+                    hudParams.x = initialX + dx
+                    hudParams.y = initialY + dy
+                    windowManager.updateViewLayout(container, hudParams)
+                    true
+                }
+                MotionEvent.ACTION_UP -> {
+                    if (!moved) {
+                        autoTapEnabled = !autoTapEnabled
+                        statusLabel.text = if (autoTapEnabled) "⋮⋮  RadiusTap AUTO ON" else "⋮⋮  RadiusTap PAUSED"
+                        statusLabel.setTextColor(
+                            Color.parseColor(if (autoTapEnabled) "#10B981" else "#FBBF24")
+                        )
+                    }
+                    true
+                }
+                else -> false
+            }
+        }
+
+        overlayHudView = container
+        windowManager.addView(overlayHudView, hudParams)
+    }
+
+    /**
+     * 3. Exact 360-step radial ring scanner (`sampleRingAngles`) + circular mean
+     *    (`atan2(sin, cos)`) + angular velocity (`dTheta / dt`) prediction.
+     */
+    fun processCapturedBitmap(bitmap: Bitmap) {
+        val nowSec = System.nanoTime() / 1_000_000_000.0
+        val samples = 360
+        val minChannel = max(175, 255 - whiteTolerance)
+        val whiteIndices = ArrayList<Int>(48)
+
+        for (i in 0 until samples) {
+            val angle = (i.toDouble() / samples) * (2.0 * Math.PI)
+            val sx = (ringCenterX + cos(angle) * ringRadiusPx).roundToInt()
+                .coerceIn(0, bitmap.width - 1)
+            val sy = (ringCenterY + sin(angle) * ringRadiusPx).roundToInt()
+                .coerceIn(0, bitmap.height - 1)
+
+            val pixel = bitmap.getPixel(sx, sy)
+            val r = Color.red(pixel)
+            val g = Color.green(pixel)
+            val b = Color.blue(pixel)
+
+            if (r >= minChannel && g >= minChannel && b >= minChannel) {
+                whiteIndices.add(i)
+            }
+        }
+
+        if (whiteIndices.isEmpty()) return
+
+        // Group contiguous white indices into clusters (handling 0/360 wrap)
+        val clusters = ArrayList<MutableList<Int>>()
+        var current = mutableListOf(whiteIndices[0])
+        for (i in 1 until whiteIndices.size) {
+            if (whiteIndices[i] == current.last() + 1) {
+                current.add(whiteIndices[i])
+            } else {
+                clusters.add(current)
+                current = mutableListOf(whiteIndices[i])
+            }
+        }
+        clusters.add(current)
+
+        if (clusters.size > 1 && clusters.first().first() == 0 && clusters.last().last() == samples - 1) {
+            clusters[0] = (clusters.last() + clusters.first()).toMutableList()
+            clusters.removeAt(clusters.lastIndex)
+        }
+
+        // Circular mean angle helper: atan2(sum(sin), sum(cos))
+        fun circularMeanAngle(cluster: List<Int>): Double {
+            var sinSum = 0.0
+            var cosSum = 0.0
+            for (idx in cluster) {
+                val a = (idx.toDouble() / samples) * (2.0 * Math.PI)
+                sinSum += sin(a)
+                cosSum += cos(a)
+            }
+            return atan2(sinSum, cosSum)
+        }
+
+        // Wider cluster = white center target arc; narrower cluster = pendulum tip dot
+        clusters.sortByDescending { it.size }
+        detectedTargetAngle = circularMeanAngle(clusters[0])
+
+        if (clusters.size >= 2) {
+            val dotAngle = circularMeanAngle(clusters[1])
+            val prevDot = prevDotAngle
+            val prevTime = prevFrameTimeSec
+
+            if (prevDot != null && prevTime != null) {
+                val dt = max(nowSec - prevTime, 1e-4)
+                val omega = shortestAngleDiff(dotAngle, prevDot) / dt
+                val predictedDot = dotAngle + omega * (leadOffsetMs / 1000.0)
+                val delta = abs(shortestAngleDiff(detectedTargetAngle, predictedDot))
+
+                val triggerTolerance = max(0.06, abs(omega) * dt * 1.15)
+                val nowMs = System.currentTimeMillis()
+
+                if (autoTapEnabled && delta <= triggerTolerance && (nowMs - lastTapTimestampMs) > 250L) {
+                    lastTapTimestampMs = nowMs
+                    val tapX = (ringCenterX + cos(detectedTargetAngle) * ringRadiusPx).toFloat()
+                    val tapY = (ringCenterY + sin(detectedTargetAngle) * ringRadiusPx).toFloat()
+                    dispatchCenterRadiusTap(tapX, tapY)
+                }
+            }
+
+            prevDotAngle = dotAngle
+            prevFrameTimeSec = nowSec
+        }
+
+        mainHandler.post { reticleOverlayView.invalidate() }
+    }
+
+    /**
+     * 4. Performs physical touch tap at the detected white center radius `(x, y)`.
+     */
+    private fun dispatchCenterRadiusTap(x: Float, y: Float) {
+        val tapPath = Path().apply { moveTo(x, y) }
+        val stroke = GestureDescription.StrokeDescription(tapPath, 0L, 18L)
+        val gesture = GestureDescription.Builder().addStroke(stroke).build()
+        dispatchGesture(gesture, null, null)
+    }
+
+    private fun shortestAngleDiff(a: Double, b: Double): Double {
+        var diff = (a - b + Math.PI) % (2.0 * Math.PI)
+        if (diff < 0) diff += 2.0 * Math.PI
+        return diff - Math.PI
+    }
+
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
+    override fun onInterrupt() {}
+
+    override fun onDestroy() {
+        super.onDestroy()
+        if (::overlayHudView.isInitialized) windowManager.removeView(overlayHudView)
+        if (::reticleOverlayView.isInitialized) windowManager.removeView(reticleOverlayView)
+        virtualDisplay?.release()
+        imageReader?.close()
+        mediaProjection?.stop()
+    }
+
+    /** Custom transparent View rendering the live center-radius target crosshair */
+    inner class ReticleCanvasView(context: Context) : View(context) {
+        private val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 4f
+            color = Color.parseColor("#88A855F7")
+        }
+        private val targetPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 5f
+            color = Color.parseColor("#10B981")
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+            canvas.drawCircle(ringCenterX, ringCenterY, ringRadiusPx, ringPaint)
+            val tx = (ringCenterX + cos(detectedTargetAngle) * ringRadiusPx).toFloat()
+            val ty = (ringCenterY + sin(detectedTargetAngle) * ringRadiusPx).toFloat()
+            canvas.drawCircle(tx, ty, 26f, targetPaint)
+            canvas.drawLine(tx - 38f, ty, tx + 38f, ty, targetPaint)
+            canvas.drawLine(tx, ty - 38f, tx, ty + 38f, targetPaint)
+        }
+    }
+}
+</script>
+
+  <script type="text/plain" id="android-xml-template"><!-- 1. Add permissions & service declaration inside AndroidManifest.xml -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.radiustap.overlay">
+
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+
+    <application
+        android:allowBackup="true"
+        android:label="RadiusTap Overlay HUD">
+
+        <service
+            android:name=".RadiusTapOverlayService"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
+            android:foregroundServiceType="mediaProjection"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+    </application>
+</manifest>
+
+<!-- 2. Save as res/xml/accessibility_service_config.xml -->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowStateChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagDefault|flagRetrieveInteractiveWindows"
+    android:canPerformGestures="true"
+    android:canRetrieveWindowContent="false"
+    android:description="@string/radiustap_service_desc"
+    android:notificationTimeout="50" />
+</script>
+
+  <!-- =======================================================================
+       APPLICATION LOGIC: FLOATING OVERLAY HUD, RETICLE DRAG & VISION ENGINE
+       ======================================================================= -->
+  <script>
+    // -------------------------------------------------------------------------
+    // 1. GLOBAL STATE & CALIBRATION CONFIGURATION
+    // -------------------------------------------------------------------------
+    const state = {
+      autoTapEnabled: true,
+      audioEnabled: true,
+      audioInitialized: false,
+      hudCollapsed: false,
+      tuningOpen: true,
+      tapMode: 'center', // 'center' = Tap Center Radius | 'zone' = Tap Target Zone
+      backgroundSource: 'sim', // 'sim' = Interactive Game | 'mirror' = Live Screen Capture
+
+      // Calibration parameters
+      leadMs: 12,
+      colorTolerance: 28,
+      speedMultiplier: 1.0,
+      customRadiusOverride: null, // null = auto-fit screen; number = calibrated px
+      reticleOffset: { x: 0, y: 0 }, // User-draggable center offset for Screen Capture mode
+
+      // Game & Physics state
+      score: 2,
+      coins: 17,
+      remainingToGoal: 62,
+      attemptsLeft: 2,
+
+      // Ring & Pendulum kinematics (radians, 0 = right, PI/2 = bottom)
+      dotAngle: Math.PI / 2,
+      baseOmega: 2.95,
+      direction: 1,
+      targetCenterAngle: -Math.PI * 0.28,
+      targetHalfArc: 0.36,
+      whiteCoreHalfArc: 0.13,
+
+      // Vision scanner outputs
+      detectedTargetAngle: -Math.PI * 0.28,
+      detectedDotAngle: Math.PI / 2,
+      measuredOmega: 2.95,
+      prevMeasuredDotAngle: Math.PI / 2,
+      lastAutoTapTimestamp: 0,
+
+      // Stats & effects
+      totalTaps: 0,
+      successfulHits: 0,
+      streak: 0,
+      ripples: [],
+      floatingPopups: [],
+      shakeTimer: 0,
+
+      // Screen capture stream
+      mirrorStream: null,
+      activeExportTab: 'kt',
+    };
+
+    // Synthetic Tone.js audio feedback (no external URLs)
+    let hitSynth = null;
+    let missSynth = null;
+
+    function initAudio() {
+      if (state.audioInitialized || typeof Tone === 'undefined') return;
+      try {
+        Tone.start();
+        hitSynth = new Tone.PolySynth(Tone.Synth, {
+          oscillator: { type: 'triangle' },
+          envelope: { attack: 0.005, decay: 0.11, sustain: 0.02, release: 0.14 }
+        }).toDestination();
+        hitSynth.volume.value = -10;
+
+        missSynth = new Tone.Synth({
+          oscillator: { type: 'sawtooth' },
+          envelope: { attack: 0.01, decay: 0.16, sustain: 0, release: 0.1 }
+        }).toDestination();
+        missSynth.volume.value = -14;
+        state.audioInitialized = true;
+      } catch (_) {}
+    }
+
+    function playHitSound(isPerfect) {
+      if (!state.audioEnabled) return;
+      initAudio();
+      if (!hitSynth) return;
+      try {
+        if (isPerfect) hitSynth.triggerAttackRelease(['C6', 'G6'], '32n');
+        else hitSynth.triggerAttackRelease('E5', '32n');
+      } catch (_) {}
+    }
+
+    function playMissSound() {
+      if (!state.audioEnabled) return;
+      initAudio();
+      if (!missSynth) return;
+      try {
+        missSynth.triggerAttackRelease('A2', '16n');
+      } catch (_) {}
+    }
+
+    // -------------------------------------------------------------------------
+    // 2. TOAST & FLOATING HUD CONTROLS (DRAG, COLLAPSE, TUNING, EXPORT MODAL)
+    // -------------------------------------------------------------------------
+    function showToast(message, type = 'success') {
+      const container = document.getElementById('toast-container');
+      const toast = document.createElement('div');
+      const styles = type === 'success'
+        ? 'bg-[#11121c]/95 border-emerald-500/45 text-emerald-300'
+        : type === 'warn'
+        ? 'bg-[#11121c]/95 border-amber-500/45 text-amber-300'
+        : 'bg-[#11121c]/95 border-purple-500/45 text-purple-200';
+
+      toast.className = `pointer-events-auto px-3.5 py-2 rounded-xl border ${styles} shadow-2xl backdrop-blur-md text-xs font-medium flex items-center gap-2 transition-all duration-200 transform -translate-y-2 opacity-0`;
+      toast.innerHTML = `<span class="w-2 h-2 rounded-full ${type === 'success' ? 'bg-emerald-400' : 'bg-purple-400'}"></span><span>${message}</span>`;
+      container.appendChild(toast);
+
+      requestAnimationFrame(() => toast.classList.remove('-translate-y-2', 'opacity-0'));
+      setTimeout(() => {
+        toast.classList.add('opacity-0', '-translate-y-2');
+        setTimeout(() => toast.remove(), 250);
+      }, 2400);
+    }
+
+    // Make the Floating Overlay HUD freely draggable across mobile & desktop screens
+    (function setupDraggableHud() {
+      const hud = document.getElementById('floating-hud');
+      const handle = document.getElementById('hud-drag-handle');
+      let isDragging = false;
+      let startX = 0, startY = 0;
+      let origLeft = 16, origTop = 16;
+
+      handle.addEventListener('pointerdown', (e) => {
+        if (e.target.closest('button')) return;
+        isDragging = true;
+        startX = e.clientX;
+        startY = e.clientY;
+        const rect = hud.getBoundingClientRect();
+        origLeft = rect.left;
+        origTop = rect.top;
+        handle.setPointerCapture(e.pointerId);
+      });
+
+      handle.addEventListener('pointermove', (e) => {
+        if (!isDragging) return;
+        const dx = e.clientX - startX;
+        const dy = e.clientY - startY;
+        const maxLeft = Math.max(8, window.innerWidth - hud.offsetWidth - 8);
+        const maxTop = Math.max(8, window.innerHeight - hud.offsetHeight - 8);
+        const nextLeft = Math.min(Math.max(8, origLeft + dx), maxLeft);
+        const nextTop = Math.min(Math.max(8, origTop + dy), maxTop);
+        hud.style.left = `${nextLeft}px`;
+        hud.style.top = `${nextTop}px`;
+      });
+
+      const endDrag = (e) => {
+        if (!isDragging) return;
+        isDragging = false;
+        try { handle.releasePointerCapture(e.pointerId); } catch (_) {}
+      };
+      handle.addEventListener('pointerup', endDrag);
+      handle.addEventListener('pointercancel', endDrag);
+    })();
+
+    function toggleHudCollapse() {
+      state.hudCollapsed = !state.hudCollapsed;
+      const body = document.getElementById('hud-collapsible-body');
+      const icon = document.getElementById('hud-collapse-icon');
+      if (state.hudCollapsed) {
+        body.classList.add('hidden');
+        icon.style.transform = 'rotate(180deg)';
+      } else {
+        body.classList.remove('hidden');
+        icon.style.transform = 'rotate(0deg)';
+      }
+    }
+
+    function toggleTuningDrawer() {
+      state.tuningOpen = !state.tuningOpen;
+      const content = document.getElementById('tuning-drawer-content');
+      const chevron = document.getElementById('tuning-drawer-chevron');
+      if (state.tuningOpen) {
+        content.classList.remove('hidden');
+        chevron.textContent = '▾';
+      } else {
+        content.classList.add('hidden');
+        chevron.textContent = '▸';
+      }
+    }
+
+    function toggleAudio() {
+      initAudio();
+      state.audioEnabled = !state.audioEnabled;
+      document.getElementById('hud-audio-icon').textContent = state.audioEnabled ? '🔊' : '🔇';
+    }
+
+    function toggleAutoTap() {
+      initAudio();
+      state.autoTapEnabled = !state.autoTapEnabled;
+      const btn = document.getElementById('master-power-btn');
+      const label = document.getElementById('master-power-label');
+      const led = document.getElementById('hud-status-led');
+
+      if (state.autoTapEnabled) {
+        btn.className = 'flex-1 py-2 px-3 rounded-xl font-bold text-xs tracking-wide transition-all flex items-center justify-center gap-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-lg shadow-emerald-500/25';
+        label.textContent = state.tapMode === 'center' ? 'AUTO ON • CENTER LOCK' : 'AUTO ON • ZONE LOCK';
+        led.className = 'w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_8px_#10b981]';
+        showToast('Auto-Click Overlay armed — locking onto target radius');
+      } else {
+        btn.className = 'flex-1 py-2 px-3 rounded-xl font-bold text-xs tracking-wide transition-all flex items-center justify-center gap-2 bg-white/10 hover:bg-white/15 text-amber-300 border border-amber-500/35';
+        label.textContent = 'AUTO OFF • STANDBY';
+        led.className = 'w-2.5 h-2.5 rounded-full bg-amber-400';
+        showToast('Auto-Click Overlay paused', 'warn');
+      }
+    }
+
+    function setTapMode(mode) {
+      state.tapMode = mode;
+      const centerBtn = document.getElementById('mode-center-btn');
+      const zoneBtn = document.getElementById('mode-zone-btn');
+      const desc = document.getElementById('tap-mode-desc');
+      const masterLabel = document.getElementById('master-power-label');
+
+      if (mode === 'center') {
+        centerBtn.className = 'py-1.5 px-2 rounded-md bg-emerald-500 text-slate-950 font-bold transition';
+        zoneBtn.className = 'py-1.5 px-2 rounded-md text-gray-400 hover:text-white transition';
+        desc.textContent = 'Exact White Core';
+        if (state.autoTapEnabled) masterLabel.textContent = 'AUTO ON • CENTER LOCK';
+      } else {
+        zoneBtn.className = 'py-1.5 px-2 rounded-md bg-purple-500 text-white font-bold transition';
+        centerBtn.className = 'py-1.5 px-2 rounded-md text-gray-400 hover:text-white transition';
+        desc.textContent = 'Full Pink+White Arc';
+        if (state.autoTapEnabled) masterLabel.textContent = 'AUTO ON • ZONE LOCK';
+      }
+    }
+
+    function updateCalibration() {
+      state.leadMs = parseFloat(document.getElementById('slider-lead').value);
+      state.colorTolerance = parseFloat(document.getElementById('slider-tolerance').value);
+      state.speedMultiplier = parseFloat(document.getElementById('slider-speed').value);
+
+      const leadSign = state.leadMs >= 0 ? '+' : '';
+      document.getElementById('val-lead').textContent = `${leadSign}${state.leadMs} ms`;
+      document.getElementById('pill-lead').textContent = `${leadSign}${state.leadMs}ms`;
+      document.getElementById('val-tolerance').textContent = `${state.colorTolerance} ΔRGB`;
+      document.getElementById('val-speed').textContent = `${state.speedMultiplier.toFixed(2)}x`;
+    }
+
+    function updateRadiusCalibration() {
+      const val = parseFloat(document.getElementById('slider-radius').value);
+      state.customRadiusOverride = val;
+      document.getElementById('val-radius').textContent = `${Math.round(val)} px`;
+      resizeGameCanvas();
+    }
+
+    function recenterReticle() {
+      state.reticleOffset = { x: 0, y: 0 };
+      state.customRadiusOverride = null;
+      resizeGameCanvas();
+      showToast('Ring alignment reticle centered to viewport', 'info');
+    }
+
+    function resetSimulator() {
+      state.score = 0;
+      state.streak = 0;
+      state.totalTaps = 0;
+      state.successfulHits = 0;
+      state.remainingToGoal = 64;
+      state.dotAngle = Math.PI / 2;
+      state.direction = 1;
+      relocateTarget();
+      showToast('Simulator score & streak reset', 'info');
+    }
+
+    // Toggle between Built-in Timing Ring Game and Live Screen Capture (`getDisplayMedia`)
+    async function toggleBackgroundSource() {
+      if (state.backgroundSource === 'mirror') {
+        stopScreenMirror();
+        return;
+      }
+
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+        showToast('Screen capture API is not supported in this browser.', 'warn');
+        return;
+      }
+
+      try {
+        const stream = await navigator.mediaDevices.getDisplayMedia({
+          video: { frameRate: { ideal: 60 } },
+          audio: false
+        });
+        state.mirrorStream = stream;
+        state.backgroundSource = 'mirror';
+        const video = document.getElementById('mirrorVideo');
+        video.srcObject = stream;
+        video.classList.remove('hidden');
+        await video.play();
+
+        document.getElementById('fullscreen-stage').style.background = '#050508';
+        document.getElementById('source-mode-dot').className = 'w-2 h-2 rounded-full bg-emerald-400 animate-pulse';
+        document.getElementById('source-mode-label').textContent = 'LIVE';
+        document.getElementById('stage-hint-pill').textContent = 'Live Screen Capture Active • Drag the center ring hub to align reticle over your mirrored game';
+
+        stream.getVideoTracks()[0].addEventListener('ended', stopScreenMirror);
+        showToast('Live Screen Capture active — drag ring hub to align with your phone mirror');
+      } catch (_) {
+        showToast('Screen capture cancelled.', 'warn');
+      }
+    }
+
+    function stopScreenMirror() {
+      if (state.mirrorStream) {
+        state.mirrorStream.getTracks().forEach(t => t.stop());
+        state.mirrorStream = null;
+      }
+      state.backgroundSource = 'sim';
+      const video = document.getElementById('mirrorVideo');
+      video.srcObject = null;
+      video.classList.add('hidden');
+
+      document.getElementById('fullscreen-stage').style.background =
+        'linear-gradient(180deg, #dceeff 0%, #ede7ff 52%, #f8e8f8 100%)';
+      document.getElementById('source-mode-dot').className = 'w-2 h-2 rounded-full bg-purple-400';
+      document.getElementById('source-mode-label').textContent = 'SIM';
+      document.getElementById('stage-hint-pill').innerHTML =
+        'Tap anywhere or press <kbd class="px-1.5 py-0.5 bg-white/20 rounded text-[10px] font-mono">SPACE</kbd> to manual tap • Drag floating HUD anywhere';
+    }
+
+    // -------------------------------------------------------------------------
+    // 3. EXACT ANGULAR MATH & CIRCULAR MEAN UTILITIES
+    // -------------------------------------------------------------------------
+    function normalizeAngle(rad) {
+      let a = rad % (Math.PI * 2);
+      if (a < 0) a += Math.PI * 2;
+      return a;
+    }
+
+    function angleDiff(a, b) {
+      let diff = (a - b + Math.PI) % (Math.PI * 2);
+      if (diff < 0) diff += Math.PI * 2;
+      return diff - Math.PI;
+    }
+
+    function radToDeg(rad) {
+      return (normalizeAngle(rad) * 180) / Math.PI;
+    }
+
+    /**
+     * Exact circular mean angle calculation: atan2(sum(sin), sum(cos))
+     * Prevents 0°/360° wrap-around distortion when clustering white pixels.
+     */
+    function circularMeanAngle(indices, totalSamples) {
+      let sinSum = 0;
+      let cosSum = 0;
+      for (let i = 0; i < indices.length; i++) {
+        const theta = (indices[i] / totalSamples) * (Math.PI * 2);
+        sinSum += Math.sin(theta);
+        cosSum += Math.cos(theta);
+      }
+      return normalizeAngle(Math.atan2(sinSum, cosSum));
+    }
+
+    function relocateTarget() {
+      let candidate = Math.random() * Math.PI * 2;
+      for (let i = 0; i < 12; i++) {
+        if (Math.abs(angleDiff(candidate, state.dotAngle)) > 1.3) break;
+        candidate = Math.random() * Math.PI * 2;
+      }
+      state.targetCenterAngle = normalizeAngle(candidate);
+    }
+
+    // -------------------------------------------------------------------------
+    // 4. FULL-SCREEN CANVAS RENDERING & INTERACTIVE RING RETICLE
+    // -------------------------------------------------------------------------
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    let canvasGeometry = { w: 400, h: 700, cx: 200, cy: 360, ringRadius: 145, ringThickness: 26 };
+
+    function resizeGameCanvas() {
+      const rect = canvas.getBoundingClientRect();
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      canvas.width = Math.max(300, Math.floor(rect.width * dpr));
+      canvas.height = Math.max(300, Math.floor(rect.height * dpr));
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+      const w = rect.width;
+      const h = rect.height;
+      const autoRadius = Math.min(w * 0.34, h * 0.24, 175);
+      const ringRadius = state.customRadiusOverride !== null ? state.customRadiusOverride : autoRadius;
+
+      if (state.customRadiusOverride === null) {
+        const slider = document.getElementById('slider-radius');
+        if (slider) {
+          slider.value = Math.round(ringRadius);
+          document.getElementById('val-radius').textContent = `Auto (${Math.round(ringRadius)} px)`;
+        }
+      }
+
+      canvasGeometry = {
+        w,
+        h,
+        cx: w * 0.5 + state.reticleOffset.x,
+        cy: h * 0.54 + state.reticleOffset.y,
+        ringRadius,
+        ringThickness: Math.max(18, ringRadius * 0.175),
+      };
+    }
+
+    window.addEventListener('resize', resizeGameCanvas);
+
+    function roundRect(ctx, x, y, width, height, radius) {
+      ctx.beginPath();
+      ctx.moveTo(x + radius, y);
+      ctx.lineTo(x + width - radius, y);
+      ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
+      ctx.lineTo(x + width, y + height - radius);
+      ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+      ctx.lineTo(x + radius, y + height);
+      ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
+      ctx.lineTo(x, y + radius);
+      ctx.quadraticCurveTo(x, y, x + radius, y);
+      ctx.closePath();
+    }
+
+    function renderStageFrame() {
+      const { w, h, cx, cy, ringRadius, ringThickness } = canvasGeometry;
+      ctx.clearRect(0, 0, w, h);
+
+      // If in Live Screen Capture mode, draw the mirrored video frame onto canvas so
+      // `sampleRingAngles` can sample real screen pixels directly!
+      if (state.backgroundSource === 'mirror') {
+        const video = document.getElementById('mirrorVideo');
+        if (video.videoWidth > 0 && video.videoHeight > 0) {
+          const scale = Math.min(w / video.videoWidth, h / video.videoHeight);
+          const drawW = video.videoWidth * scale;
+          const drawH = video.videoHeight * scale;
+          const drawX = (w - drawW) / 2;
+          const drawY = (h - drawH) / 2;
+          ctx.drawImage(video, drawX, drawY, drawW, drawH);
+        }
+        renderEffectsAndReticle(cx, cy, ringRadius);
+        return;
+      }
+
+      // Otherwise render the full interactive mobile timing ring game
+      ctx.save();
+      if (state.shakeTimer > 0) {
+        const mag = state.shakeTimer * 7;
+        ctx.translate((Math.random() - 0.5) * mag, (Math.random() - 0.5) * mag);
+      }
+
+      // 1. Top $100 Reward Card Header
+      const cardW = Math.min(w * 0.44, 210);
+      const cardH = cardW * 0.46;
+      const cardY = Math.max(18, h * 0.06);
+
+      ctx.save();
+      ctx.translate(w * 0.5, cardY + cardH / 2);
+      ctx.rotate(-0.025);
+      ctx.fillStyle = '#338a4e';
+      roundRect(ctx, -cardW / 2, -cardH / 2, cardW, cardH, 12);
+      ctx.fill();
+      ctx.lineWidth = 2.5;
+      ctx.strokeStyle = '#68c182';
+      roundRect(ctx, -cardW / 2 + 5, -cardH / 2 + 5, cardW - 10, cardH - 10, 8);
+      ctx.stroke();
+
+      ctx.fillStyle = '#ffffff';
+      ctx.font = `800 ${Math.round(cardH * 0.42)}px Inter, sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('$100', 0, -2);
+
+      const badgeW = cardW * 0.62;
+      const badgeH = cardH * 0.27;
+      ctx.fillStyle = '#facc15';
+      roundRect(ctx, -badgeW / 2, cardH / 2 - badgeH * 0.55, badgeW, badgeH, badgeH / 2);
+      ctx.fill();
+      ctx.fillStyle = '#422006';
+      ctx.font = `800 ${Math.round(badgeH * 0.52)}px Inter, sans-serif`;
+      ctx.fillText('GUARANTEED', 0, cardH / 2 - badgeH * 0.55 + badgeH / 2 + 0.5);
+      ctx.restore();
+
+      // Subtitle
+      ctx.fillStyle = '#475569';
+      ctx.font = `700 ${Math.max(12, Math.round(Math.min(w, h) * 0.024))}px Inter, sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.fillText(`${state.remainingToGoal} to go for $100`, w * 0.5, cardY + cardH + 22);
+
+      // 2. Large Grey-Lavender Outer Disc Backing
+      const outerDiscRadius = ringRadius * 1.38;
+      const discGrad = ctx.createRadialGradient(cx, cy, ringRadius * 0.3, cx, cy, outerDiscRadius);
+      discGrad.addColorStop(0, 'rgba(218, 210, 224, 0.85)');
+      discGrad.addColorStop(1, 'rgba(166, 158, 173, 0.92)');
+      ctx.fillStyle = discGrad;
+      ctx.beginPath();
+      ctx.arc(cx, cy, outerDiscRadius, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = '#d7cfd6';
+      ctx.beginPath();
+      ctx.arc(cx, cy, ringRadius - ringThickness * 0.45, 0, Math.PI * 2);
+      ctx.fill();
+
+      // 3. Purple Main Timing Ring
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(cx, cy, ringRadius, 0, Math.PI * 2);
+      ctx.lineWidth = ringThickness;
+      ctx.strokeStyle = '#5b21b6';
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.arc(cx, cy, ringRadius, 0, Math.PI * 2);
+      ctx.lineWidth = ringThickness * 0.76;
+      ctx.strokeStyle = '#7c3aed';
+      ctx.stroke();
+      ctx.restore();
+
+      // 4. Segmented Target Arc (3 pink + 3 white center + 3 pink)
+      const totalSegments = 9;
+      const segSpan = (state.targetHalfArc * 2) / totalSegments;
+      const gap = 0.012;
+      const startAngle = state.targetCenterAngle - state.targetHalfArc;
+
+      for (let i = 0; i < totalSegments; i++) {
+        const a0 = startAngle + i * segSpan + gap / 2;
+        const a1 = startAngle + (i + 1) * segSpan - gap / 2;
+        const isCenterWhite = i >= 3 && i <= 5;
+
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(cx, cy, ringRadius, a0, a1);
+        ctx.lineWidth = ringThickness * 1.16;
+        ctx.strokeStyle = isCenterWhite ? '#fffdf9' : '#ff66b3';
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.arc(cx, cy, ringRadius + ringThickness * 0.14, a0, a1);
+        ctx.lineWidth = ringThickness * 0.32;
+        ctx.strokeStyle = isCenterWhite ? '#ffffff' : '#ff8cc6';
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      // 5. Large Score Counter inside Top Ring
+      ctx.fillStyle = '#ffffff';
+      ctx.font = `800 ${Math.round(ringRadius * 0.46)}px Inter, sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.shadowColor = 'rgba(0,0,0,0.14)';
+      ctx.shadowBlur = 8;
+      ctx.fillText(`${state.score}`, cx, cy - ringRadius * 0.62);
+      ctx.shadowBlur = 0;
+
+      // 6. Central Pivot + Rotating Black Pendulum Arm + White Tip Dot
+      const dotX = cx + Math.cos(state.dotAngle) * ringRadius;
+      const dotY = cy + Math.sin(state.dotAngle) * ringRadius;
+
+      ctx.fillStyle = '#18181b';
+      ctx.beginPath();
+      ctx.arc(cx, cy, ringThickness * 0.58, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.save();
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(dotX, dotY);
+      ctx.lineWidth = Math.max(5, ringThickness * 0.24);
+      ctx.lineCap = 'round';
+      ctx.strokeStyle = '#18181b';
+      ctx.stroke();
+      ctx.restore();
+
+      // Center Green Cash Bill Emblem
+      ctx.save();
+      ctx.translate(cx, cy - ringRadius * 0.12);
+      ctx.rotate(-0.08);
+      const miniBillW = ringRadius * 0.72;
+      const miniBillH = miniBillW * 0.48;
+      ctx.fillStyle = '#338a4e';
+      roundRect(ctx, -miniBillW / 2, -miniBillH / 2, miniBillW, miniBillH, 4);
+      ctx.fill();
+      ctx.strokeStyle = '#68c182';
+      ctx.lineWidth = 2;
+      roundRect(ctx, -miniBillW / 2 + 4, -miniBillH / 2 + 4, miniBillW - 8, miniBillH - 8, 2);
+      ctx.stroke();
+      ctx.fillStyle = '#eab308';
+      ctx.beginPath();
+      ctx.arc(0, 0, miniBillH * 0.22, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+
+      // White Tip Circle at Ring Radius
+      ctx.save();
+      ctx.fillStyle = '#fbf9f5';
+      ctx.shadowColor = 'rgba(0, 0, 0, 0.28)';
+      ctx.shadowBlur = 6;
+      ctx.beginPath();
+      ctx.arc(dotX, dotY, ringThickness * 0.48, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+
+      // Bottom "attempts left" pill
+      const pillW = 166;
+      const pillH = 34;
+      const pillY = Math.min(h - 58, cy + outerDiscRadius + 24);
+      ctx.fillStyle = 'rgba(255,255,255,0.92)';
+      roundRect(ctx, cx - pillW / 2, pillY, pillW, pillH, 17);
+      ctx.fill();
+      ctx.fillStyle = '#1e293b';
+      ctx.font = '700 12.5px Inter, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(`${state.attemptsLeft} attempts left ⚡`, cx, pillY + pillH / 2 + 1);
+
+      renderEffectsAndReticle(cx, cy, ringRadius);
+      ctx.restore();
+    }
+
+    function renderEffectsAndReticle(cx, cy, ringRadius) {
+      // Tap Ripple Effects
+      for (let i = state.ripples.length - 1; i >= 0; i--) {
+        const r = state.ripples[i];
+        r.radius += 2.8;
+        r.alpha -= 0.032;
+        if (r.alpha <= 0) {
+          state.ripples.splice(i, 1);
+          continue;
+        }
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(r.x, r.y, r.radius, 0, Math.PI * 2);
+        ctx.lineWidth = 3.5;
+        ctx.strokeStyle = r.success
+          ? `rgba(16, 185, 129, ${r.alpha})`
+          : `rgba(244, 63, 94, ${r.alpha})`;
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      // Floating Score Popups
+      for (let i = state.floatingPopups.length - 1; i >= 0; i--) {
+        const p = state.floatingPopups[i];
+        p.y -= 1.1;
+        p.alpha -= 0.022;
+        if (p.alpha <= 0) {
+          state.floatingPopups.splice(i, 1);
+          continue;
+        }
+        ctx.save();
+        ctx.font = '800 13px JetBrains Mono, monospace';
+        ctx.textAlign = 'center';
+        ctx.fillStyle = p.color.replace('ALPHA', p.alpha.toFixed(2));
+        ctx.fillText(p.text, p.x, p.y);
+        ctx.restore();
+      }
+
+      // Interactive Ring Alignment Reticle Overlay
+      if (document.getElementById('toggle-debug-overlay').checked) {
+        const targetX = cx + Math.cos(state.detectedTargetAngle) * ringRadius;
+        const targetY = cy + Math.sin(state.detectedTargetAngle) * ringRadius;
+        const dotX = cx + Math.cos(state.detectedDotAngle) * ringRadius;
+        const dotY = cy + Math.sin(state.detectedDotAngle) * ringRadius;
+
+        ctx.save();
+
+        // Scan circle outline
+        ctx.strokeStyle = 'rgba(168, 85, 247, 0.45)';
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([5, 5]);
+        ctx.beginPath();
+        ctx.arc(cx, cy, ringRadius, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Center draggable hub handle (for aligning reticle over Screen Capture feeds)
+        ctx.fillStyle = 'rgba(13, 15, 25, 0.78)';
+        ctx.strokeStyle = '#a855f7';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(cx, cy, 12, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+
+        // Ray from center hub to white target center radius
+        ctx.setLineDash([4, 4]);
+        ctx.strokeStyle = 'rgba(16, 185, 129, 0.85)';
+        ctx.lineWidth = 1.8;
+        ctx.beginPath();
+        ctx.moveTo(cx, cy);
+        ctx.lineTo(targetX, targetY);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Emerald Target Center Radius Reticle
+        ctx.strokeStyle = '#10b981';
+        ctx.lineWidth = 2.4;
+        ctx.beginPath();
+        ctx.arc(targetX, targetY, 15, 0, Math.PI * 2);
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.moveTo(targetX - 22, targetY); ctx.lineTo(targetX - 9, targetY);
+        ctx.moveTo(targetX + 9, targetY); ctx.lineTo(targetX + 22, targetY);
+        ctx.moveTo(targetX, targetY - 22); ctx.lineTo(targetX, targetY - 9);
+        ctx.moveTo(targetX, targetY + 9); ctx.lineTo(targetX, targetY + 22);
+        ctx.stroke();
+
+        ctx.fillStyle = '#10b981';
+        ctx.beginPath();
+        ctx.arc(targetX, targetY, 3.5, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Pill badge above target crosshair
+        ctx.fillStyle = 'rgba(9, 9, 15, 0.88)';
+        roundRect(ctx, targetX - 38, targetY - 35, 76, 16, 5);
+        ctx.fill();
+        ctx.fillStyle = '#34d399';
+        ctx.font = '700 9.5px JetBrains Mono, monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText(`TAP ${radToDeg(state.detectedTargetAngle).toFixed(0)}°`, targetX, targetY - 24);
+
+        // Live Pendulum Dot Marker Ring
+        ctx.strokeStyle = '#facc15';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(dotX, dotY, 15, 0, Math.PI * 2);
+        ctx.stroke();
+
+        ctx.restore();
+      }
+    }
+
+    // -------------------------------------------------------------------------
+    // 5. EXACT 360-STEP RADIAL RING SCANNER & ANGULAR PREDICTION ENGINE
+    // -------------------------------------------------------------------------
+    /**
+     * Exact algorithm used in the vision engine:
+     * 1. `sampleRingAngles`: Samples 360 steps around the ring perimeter for high-luminance white pixels.
+     * 2. `findWhiteTargetCluster`: Groups contiguous white indices (handling 0/360 wrap-around).
+     * 3. `circularMeanAngle`: Computes atan2(sum(sin), sum(cos)) for target center & pendulum dot.
+     * 4. `dTheta / dt` angular velocity prediction + lead-time trigger check.
+     */
+    function sampleRingAnglesAndPredict(dt) {
+      const { cx, cy, ringRadius } = canvasGeometry;
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const samples = 360;
+      const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+      const wPx = canvas.width;
+      const hPx = canvas.height;
+
+      const whiteIndices = [];
+      const minChannelVal = Math.max(175, 255 - state.colorTolerance);
+
+      // Step 1: 360-step radial ring scan
+      for (let i = 0; i < samples; i++) {
+        const angle = (i / samples) * (Math.PI * 2);
+        const sx = Math.round((cx + Math.cos(angle) * ringRadius) * dpr);
+        const sy = Math.round((cy + Math.sin(angle) * ringRadius) * dpr);
+        if (sx < 0 || sx >= wPx || sy < 0 || sy >= hPx) continue;
+
+        const idx = (sy * wPx + sx) * 4;
+        const r = imgData[idx];
+        const g = imgData[idx + 1];
+        const b = imgData[idx + 2];
+
+        if (r >= minChannelVal && g >= minChannelVal && b >= minChannelVal) {
+          whiteIndices.push(i);
+        }
+      }
+
+      // Step 2: Contiguous white cluster grouping (`findWhiteTargetCluster`)
+      if (whiteIndices.length > 0) {
+        const clusters = [];
+        let curr = [whiteIndices[0]];
+        for (let i = 1; i < whiteIndices.length; i++) {
+          if (whiteIndices[i] === curr[curr.length - 1] + 1) {
+            curr.push(whiteIndices[i]);
+          } else {
+            clusters.push(curr);
+            curr = [whiteIndices[i]];
+          }
+        }
+        clusters.push(curr);
+
+        // Merge wrap-around cluster across 0 / 359 boundary
+        if (
+          clusters.length > 1 &&
+          clusters[0][0] === 0 &&
+          clusters[clusters.length - 1][clusters[clusters.length - 1].length - 1] === samples - 1
+        ) {
+          clusters[0] = clusters[clusters.length - 1].concat(clusters[0]);
+          clusters.pop();
+        }
+
+        // Step 3: Circular mean angle calculation via atan2(sin, cos)
+        if (clusters.length >= 2) {
+          if (state.backgroundSource === 'sim') {
+            // Pick the cluster furthest from the current pendulum dot as the target center
+            let bestTargetAngle = null;
+            let bestDotAngle = null;
+            let maxDist = -1;
+            let minDist = Infinity;
+
+            for (const cl of clusters) {
+              const ang = circularMeanAngle(cl, samples);
+              const d = Math.abs(angleDiff(ang, state.dotAngle));
+              if (d > maxDist) {
+                maxDist = d;
+                bestTargetAngle = ang;
+              }
+              if (d < minDist) {
+                minDist = d;
+                bestDotAngle = ang;
+              }
+            }
+            if (bestTargetAngle !== null) state.detectedTargetAngle = bestTargetAngle;
+            if (bestDotAngle !== null) state.detectedDotAngle = bestDotAngle;
+          } else {
+            // In Live Screen Capture mode, wider white arc = target center; narrower = pendulum dot
+            clusters.sort((a, b) => b.length - a.length);
+            state.detectedTargetAngle = circularMeanAngle(clusters[0], samples);
+            state.detectedDotAngle = circularMeanAngle(clusters[1], samples);
+          }
+        } else if (clusters.length === 1 && state.backgroundSource === 'mirror') {
+          state.detectedTargetAngle = circularMeanAngle(clusters[0], samples);
+        }
+      }
+
+      // Step 4: Angular velocity estimation (`dTheta / dt`) & lead-time prediction
+      const activeDotAngle = state.backgroundSource === 'sim' ? state.dotAngle : state.detectedDotAngle;
+      const dTheta = angleDiff(activeDotAngle, state.prevMeasuredDotAngle);
+      if (dt > 0.0001) {
+        state.measuredOmega = dTheta / dt;
+      }
+      state.prevMeasuredDotAngle = activeDotAngle;
+
+      const leadSec = state.leadMs / 1000;
+      const predictedDotAngle = normalizeAngle(activeDotAngle + state.measuredOmega * leadSec);
+      const absDelta = Math.abs(angleDiff(predictedDotAngle, state.detectedTargetAngle));
+
+      // Update Floating Overlay HUD Telemetry Pills
+      const targetDeg = radToDeg(state.detectedTargetAngle);
+      const dotDeg = radToDeg(activeDotAngle);
+      const omegaDeg = Math.abs((state.measuredOmega * 180) / Math.PI);
+
+      document.getElementById('pill-target-angle').textContent = `${targetDeg.toFixed(0)}°`;
+      document.getElementById('pill-dot-angle').textContent = `${dotDeg.toFixed(0)}°`;
+      document.getElementById('pill-omega').textContent = `${omegaDeg.toFixed(0)}°`;
+      document.getElementById('pill-streak').textContent = `${state.streak}`;
+
+      const tapX = Math.round(cx + Math.cos(state.detectedTargetAngle) * ringRadius);
+      const tapY = Math.round(cy + Math.sin(state.detectedTargetAngle) * ringRadius);
+      document.getElementById('hud-anchor-coords').textContent = `(${tapX}, ${tapY}) @ R=${Math.round(ringRadius)}`;
+
+      // Lead-time intersection trigger
+      const now = performance.now();
+      const baseTriggerTol = state.tapMode === 'center' ? 0.055 : 0.14;
+      const triggerTolerance = Math.max(baseTriggerTol, Math.abs(state.measuredOmega) * dt * 1.15);
+
+      if (
+        state.autoTapEnabled &&
+        absDelta <= triggerTolerance &&
+        now - state.lastAutoTapTimestamp > 240
+      ) {
+        state.lastAutoTapTimestamp = now;
+        executeCenterRadiusTap(false);
+      }
+    }
+
+    function executeCenterRadiusTap(isManual = false) {
+      const { cx, cy, ringRadius } = canvasGeometry;
+      const tapX = cx + Math.cos(state.detectedTargetAngle) * ringRadius;
+      const tapY = cy + Math.sin(state.detectedTargetAngle) * ringRadius;
+
+      if (state.backgroundSource === 'mirror') {
+        state.streak++;
+        state.ripples.push({ x: tapX, y: tapY, radius: 10, alpha: 1.0, success: true });
+        state.floatingPopups.push({
+          x: tapX,
+          y: tapY - 18,
+          text: `TAP (${Math.round(tapX)}, ${Math.round(tapY)})`,
+          color: 'rgba(16, 185, 129, ALPHA)',
+          alpha: 1.0
+        });
+        playHitSound(true);
+        return;
+      }
+
+      state.totalTaps++;
+      const errorRad = Math.abs(angleDiff(state.dotAngle, state.targetCenterAngle));
+      const isWhiteCoreHit = errorRad <= state.whiteCoreHalfArc + 0.04;
+      const isPinkOuterHit = errorRad <= state.targetHalfArc;
+
+      if (isWhiteCoreHit || isPinkOuterHit) {
+        state.successfulHits++;
+        state.streak++;
+        state.score++;
+        if (state.remainingToGoal > 1) state.remainingToGoal--;
+        if (state.streak % 3 === 0) state.coins++;
+
+        state.direction *= -1;
+        document.getElementById('hud-direction-pill').textContent = state.direction === 1 ? 'CW ↻' : 'CCW ↺';
+
+        const errDeg = ((errorRad * 180) / Math.PI).toFixed(1);
+        state.ripples.push({ x: tapX, y: tapY, radius: 10, alpha: 1.0, success: true });
+        state.floatingPopups.push({
+          x: tapX,
+          y: tapY - 18,
+          text: isWhiteCoreHit ? `CENTER HIT (${errDeg}°)` : `ZONE HIT (${errDeg}°)`,
+          color: isWhiteCoreHit ? 'rgba(16, 185, 129, ALPHA)' : 'rgba(168, 85, 247, ALPHA)',
+          alpha: 1.0
+        });
+        playHitSound(isWhiteCoreHit);
+
+        // Relocate target to a new angle so the vision engine re-locks on the next frame
+        relocateTarget();
+      } else {
+        state.streak = 0;
+        state.shakeTimer = 1.0;
+        const dotX = cx + Math.cos(state.dotAngle) * ringRadius;
+        const dotY = cy + Math.sin(state.dotAngle) * ringRadius;
+        state.ripples.push({ x: dotX, y: dotY, radius: 10, alpha: 1.0, success: false });
+        state.floatingPopups.push({
+          x: dotX,
+          y: dotY - 18,
+          text: 'MISS!',
+          color: 'rgba(244, 63, 94, ALPHA)',
+          alpha: 1.0
+        });
+        playMissSound();
+      }
+    }
+
+    function manualTriggerTap() {
+      initAudio();
+      executeCenterRadiusTap(true);
+    }
+
+    // Canvas pointer handling: Drag center reticle hub OR tap to fire manual test tap
+    let draggingReticleHub = false;
+    let hubDragStart = { x: 0, y: 0 };
+    let hubOrigOffset = { x: 0, y: 0 };
+
+    canvas.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      const rect = canvas.getBoundingClientRect();
+      const px = e.clientX - rect.left;
+      const py = e.clientY - rect.top;
+      const distToHub = Math.hypot(px - canvasGeometry.cx, py - canvasGeometry.cy);
+
+      if (distToHub <= 24) {
+        draggingReticleHub = true;
+        hubDragStart = { x: e.clientX, y: e.clientY };
+        hubOrigOffset = { ...state.reticleOffset };
+        canvas.setPointerCapture(e.pointerId);
+      } else {
+        manualTriggerTap();
+      }
+    });
+
+    canvas.addEventListener('pointermove', (e) => {
+      if (!draggingReticleHub) return;
+      state.reticleOffset = {
+        x: hubOrigOffset.x + (e.clientX - hubDragStart.x),
+        y: hubOrigOffset.y + (e.clientY - hubDragStart.y)
+      };
+      resizeGameCanvas();
+    });
+
+    canvas.addEventListener('pointerup', (e) => {
+      if (draggingReticleHub) {
+        draggingReticleHub = false;
+        try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
+      }
+    });
+
+    window.addEventListener('keydown', (e) => {
+      if (e.code === 'Space' && document.activeElement.tagName !== 'INPUT') {
+        e.preventDefault();
+        manualTriggerTap();
+      }
+    });
+
+    // Main 60FPS Simulation & Vision Loop
+    let lastFrameTime = performance.now();
+    function mainLoop(now) {
+      const dt = Math.min((now - lastFrameTime) / 1000, 0.05);
+      lastFrameTime = now;
+
+      if (state.backgroundSource === 'sim') {
+        const omega = state.baseOmega * state.speedMultiplier * state.direction;
+        state.dotAngle = normalizeAngle(state.dotAngle + omega * dt);
+        if (state.shakeTimer > 0) {
+          state.shakeTimer = Math.max(0, state.shakeTimer - dt * 4.5);
+        }
+      }
+
+      renderStageFrame();
+      sampleRingAnglesAndPredict(dt);
+      requestAnimationFrame(mainLoop);
+    }
+
+    // -------------------------------------------------------------------------
+    // 6. ANDROID ACCESSIBILITY OVERLAY EXPORT MODAL (KOTLIN + XML)
+    // -------------------------------------------------------------------------
+    function openAndroidExportModal() {
+      document.getElementById('android-export-modal').classList.remove('hidden');
+      switchExportTab(state.activeExportTab);
+    }
+
+    function closeAndroidExportModal() {
+      document.getElementById('android-export-modal').classList.add('hidden');
+    }
+
+    function switchExportTab(tab) {
+      state.activeExportTab = tab;
+      const ktTab = document.getElementById('export-tab-kt');
+      const xmlTab = document.getElementById('export-tab-xml');
+      const viewer = document.getElementById('android-code-viewer');
+
+      if (tab === 'kt') {
+        ktTab.className = 'px-3 py-2 rounded-t-lg text-xs font-mono font-bold bg-[#181a28] text-emerald-400 border-t border-x border-white/10';
+        xmlTab.className = 'px-3 py-2 rounded-t-lg text-xs font-mono font-semibold text-gray-400 hover:text-white';
+        viewer.textContent = document.getElementById('kotlin-service-template').textContent.trim();
+      } else {
+        xmlTab.className = 'px-3 py-2 rounded-t-lg text-xs font-mono font-bold bg-[#181a28] text-emerald-400 border-t border-x border-white/10';
+        ktTab.className = 'px-3 py-2 rounded-t-lg text-xs font-mono font-semibold text-gray-400 hover:text-white';
+        viewer.textContent = document.getElementById('android-xml-template').textContent.trim();
+      }
+    }
+
+    function copyAndroidCode() {
+      const code = document.getElementById('android-code-viewer').textContent;
+      const textarea = document.createElement('textarea');
+      textarea.value = code;
+      textarea.style.position = 'fixed';
+      textarea.style.opacity = '0';
+      document.body.appendChild(textarea);
+      textarea.select();
+      try {
+        document.execCommand('copy');
+        const label = document.getElementById('modal-copy-label');
+        label.textContent = 'Copied!';
+        showToast('Copied native Android overlay code to clipboard');
+        setTimeout(() => { label.textContent = 'Copy Code'; }, 2000);
+      } catch (_) {
+        showToast('Select the code block and press Ctrl+C / Cmd+C to copy.', 'warn');
+      } finally {
+        document.body.removeChild(textarea);
+      }
+    }
+
+    function downloadAndroidCode() {
+      const code = document.getElementById('android-code-viewer').textContent;
+      const filename = state.activeExportTab === 'kt'
+        ? 'RadiusTapOverlayService.kt'
+        : 'AndroidManifest_and_accessibility_config.xml';
+      const blob = new Blob([code], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      showToast(`Downloaded ${filename}`);
+    }
+
+    // -------------------------------------------------------------------------
+    // 7. INITIALIZATION ON WINDOW LOAD
+    // -------------------------------------------------------------------------
+    window.addEventListener('load', () => {
+      updateCalibration();
+      resizeGameCanvas();
+      requestAnimationFrame(mainLoop);
+    });
+  </script>
+</body>
+</html>
